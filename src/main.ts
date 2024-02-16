@@ -37,7 +37,7 @@ function enterUniqueFileName(files, fileSuffix = '.dasflow'): string | null {
             console.log(error)
         })
 
-    const container = document.querySelector('.editor')
+    const container = document.querySelector('#node-editor')
     const ctx = new DasflowContext(websocket)
     const editor = new Rete.NodeEditor(ctx.EDITOR_VER, <HTMLElement>container)
     ctx.editor = editor

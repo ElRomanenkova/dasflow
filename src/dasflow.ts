@@ -135,13 +135,40 @@ export class DasflowContext {
         return ctx
     }
 
-    displayResult(result) {
-        const button = document.getElementById("show_button_id")
-        button!.hidden = true
-        const sim = document.getElementById("sim_id")
-        sim!.hidden = false
-        const sim_res = document.getElementById("sim_res_id")
-        sim_res!.innerHTML = result
+    private displayResult(result: SaveResult) {
+        const sim_elem = document.getElementById("sim_res_id")
+        if (this.type === FileType.Module) {
+            sim_elem!.innerHTML = "Can't be simulated because it is module file"
+            return
+        }
+
+        if (result.simulated && result.executeExitCode == 0 && result.executeError == "" && result.errors.length == 0)
+            sim_elem!.innerHTML = `>>> Execution successful: <<<\n${result.executeResult}`
+        else
+            sim_elem!.innerHTML = `>>> Execution failed: <<<\nExit code ${result.executeExitCode}\n${result.executeResult}\n${result.executeError}`
+    }
+
+    private displayCode(result: string) {
+        const code_elem = document.getElementById("code_id")
+        if (this.type === FileType.Module) {
+            code_elem!.innerHTML = "Can't be simulated because it is module file"
+            return
+        }
+
+        if (result !== "")
+            code_elem!.innerHTML = result.split('\n')
+                .map(item => `<code> ${item}\n</code>`)
+                .join('')
+        else
+            code_elem!.innerHTML = "No code generated because of node errors"
+    }
+
+    private displayErrors(result) {
+        const err_elem = document.getElementById("global_errors_id")
+        if (result !== "")
+            err_elem!.innerHTML = result
+        else
+            err_elem!.innerHTML = "No global errors were detected"
     }
 
     async save(): Promise<SaveResult> {
@@ -160,14 +187,15 @@ export class DasflowContext {
             this.editor?.trigger('removecomment', ({ comment }))
         }
 
-        return FilesRpc.save(this.websocket, this.editor, !hasErrors ? dasCtx.code : "", this.currentFile, this.type, dasCtx.getMainFunc()).then(res => {
+        return FilesRpc.save(this.websocket, this.editor, dasCtx.code, this.currentFile, this.type, dasCtx.getMainFunc()).then(res => {
             if (res.errors.length > 0) {
                 console.log(res.errors)
                 dasCtx.addNativeErrors(res.errors, this.currentFile)
             }
 
-            if (res.simulated)
-                this.displayResult(res.executeResult)
+            this.displayResult(res)
+            this.displayCode(dasCtx.code)
+            this.displayErrors(dasCtx.getGlobalErrors())
 
             let temp = new Set(this.logComments)
             for (const comment of temp) {

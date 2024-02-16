@@ -306,7 +306,7 @@ export abstract class LangComponent extends Rete.Component {
         if (ctx.isLazyInited(node))
             return
         const component = <LangComponent>ctx.editor.components.get(node.name)
-        if (!component.lazyInit)
+        if (!component.lazyInit) // when flowIn exists -> for right order of constructDasNode in constructDasFlowOut and constructInNode
             return
         ctx.setIsLazyInit(node)
         component.constructDas(node, ctx)
@@ -535,7 +535,7 @@ export class InputComponent extends LangComponent {
         node.addOutput(new Rete.Output('output', "Value", type.getSocket()))
     }
 
-    worker (node, inputs, outputs) {
+    worker(node, inputs, outputs) {
         const nodeRef = this.editor?.nodes.find(it => it.id == node.id)
         if (!nodeRef)
             return
@@ -563,7 +563,7 @@ export class InputComponent extends LangComponent {
     initOptionalInNode(node: Node, parentNode: Node, name: string, ctx: ConstructDasCtx): Node | null {
         let parentModule = ctx.currentModule
         if (parentModule == null) {
-            ctx.addGlobalError('Input node is not in module')
+            ctx.addError(node, 'Input node is not in module')
             return null
         }
 
@@ -599,7 +599,7 @@ export class OutputFlowComponent extends LangComponent {
     initDasFlowOut(node: Node, out: Output, ctx: ConstructDasCtx): void {
         let parentModule = ctx.currentModule
         if (parentModule == null) {
-            ctx.addGlobalError('OutputFlow node is not in module')
+            ctx.addError(node, 'OutputFlow node is not in module')
             return
         }
 
@@ -671,7 +671,7 @@ export class OutputComponent extends LangComponent {
 }
 
 
-export class ModuleComponent extends LangComponent {
+export class ModuleComponent extends LangComponent {  //TODO: for initialized nodes in modules: node_id + current module_id
     constructor() {
         super("Module")
         // @ts-ignore
@@ -681,7 +681,7 @@ export class ModuleComponent extends LangComponent {
     }
 
     async builder(node) {
-        let ctrl = new ComboBoxControl(this.editor, 'module', ["", "./firstModule.dasflow"])
+        let ctrl = new ComboBoxControl(this.editor, 'module', ["", "./firstModule.dasflow", "./secondModule.dasflow"]) //TODO:
         ctrl.component.methods.onChange = () => {
             this.updateModuleSockets(node)
             node.update()
@@ -758,11 +758,13 @@ export class If extends LangComponent {
             ctx.addError(node, 'then exit expected')
         ctx.closeChild(thenChildCtx)
 
+        ctx.writeLine(node, "else")
         const elseChildCtx = ctx.getChild()
-        if (LangComponent.constructDasFlowOut(node, elseChildCtx, 'else')) {
-            ctx.writeLine(node, "else")
+
+        if (LangComponent.constructDasFlowOut(node, elseChildCtx, 'else'))
             ctx.closeChild(elseChildCtx)
-        }
+        else
+            ctx.writeLine(node, "\tpass")
     }
 }
 
@@ -795,7 +797,7 @@ export class While extends LangComponent {
         if (LangComponent.constructDasFlowOut(node, childCtx, 'body'))
             ctx.closeChild(childCtx)
         else
-            ctx.writeLine(node, 'pass')
+            ctx.writeLine(node, '\tpass')
     }
 }
 
@@ -815,9 +817,6 @@ export class For extends LangComponent {
 
         node.addControl(new NumControl(this.editor, 'numArgs'))
 
-        if(node.data.typeName == null)
-            node.data.typeName = []
-
         const numArgs = node.data.numArgs ?? 1
         for (let i = 0; i < numArgs; i++) {
             this.addArgInput(node, i)
@@ -831,7 +830,7 @@ export class For extends LangComponent {
     }
 
     private addArgOutput(node, i: number) {
-        const type = node.data.typeName[i] ? this.langCtx.getType(node.data.typeName[i]) ?? this.langCtx.anyType : this.langCtx.anyType
+        const type = node.data[`typeName${i}`] ? this.langCtx.getType(node.data[`typeName${i}`]) ?? this.langCtx.anyType : this.langCtx.anyType
         const argOutput = new Rete.Output(`val${i}`, `Value ${i + 1}`, type.getSocket(), true)
         node.addOutput(argOutput)
     }
@@ -840,7 +839,6 @@ export class For extends LangComponent {
         let inType: LangType | undefined
         if (argInput) {
             if (!argInput.hasConnection()) {
-                node.data.typeName[i] = this.langCtx.anyType.getSocket().typeName
                 inType = this.langCtx.anyType
             } else {
                 const connection = argInput.connections[0]
@@ -868,7 +866,7 @@ export class For extends LangComponent {
                             this.editor?.removeConnection(connection)
                     }
                 }
-                node.data.typeName[i] = (<LangSocket>result.socket).typeName
+                node.data[`typeName${i}`] = (<LangSocket>result.socket).typeName
             }
     }
 
@@ -880,7 +878,7 @@ export class For extends LangComponent {
             for (let i = numArgs; i < reqNumArgs; i++) {
                 this.addArgInput(nodeRef, i)
                 this.addArgOutput(nodeRef, i)
-                node.data.typeName.push(this.langCtx.anyType.getSocket().typeName)
+                node.data[`typeName${i}`] = this.langCtx.anyType.getSocket().typeName
             }
             return true
         } else if (numArgs > reqNumArgs) {
@@ -897,7 +895,7 @@ export class For extends LangComponent {
                         this.editor.removeConnection(conn)
                     nodeRef.removeOutput(argOutput)
                 }
-                node.data.typeName.pop()
+                delete node.data[`typeName${i}`]
             }
             return true
         }
@@ -965,7 +963,7 @@ export class For extends LangComponent {
         if (LangComponent.constructDasFlowOut(node, childCtx, 'body'))
             ctx.closeChild(childCtx)
         else
-            ctx.writeLine(node, 'pass')
+            ctx.writeLine(node, '\tpass')
     }
 }
 
@@ -982,7 +980,7 @@ export class Function extends LangComponent {
     async builder(node) {
         this.addFlowOut(node)
 
-        node.addControl(new CheckBoxControl(this.editor, 'mainFuncMark', false))
+        node.addControl(new CheckBoxControl(this.editor, 'mainFuncMark', 'Main', false))
 
         node.addControl(new AutocomplitComboBoxControl(this.editor, 'annotation', this.langCtx.allFuncAnnotations))
 
@@ -1184,7 +1182,7 @@ export class Function extends LangComponent {
         if (LangComponent.constructDasFlowOut(node, childCtx))
             ctx.closeChild(childCtx)
         else
-            ctx.writeLine(node, "pass")
+            ctx.writeLine(node, "\tpass")
         ctx.writeLine(node, "")
     }
 
@@ -1403,6 +1401,7 @@ export class ConstructDasCtx {
     private _indenting = ""
     private _code = ""
     errors = new Map<number, string[]>()
+    globalErrors = ""
     private lazyInited = new Set<number>()
     private requirements = new Set<string>()
 
@@ -1446,6 +1445,10 @@ export class ConstructDasCtx {
         return this.mainFunctions[0]
     }
 
+    getGlobalErrors() {
+        return this.globalErrors
+    }
+
     writeLine(node: Node, str: string): void {
         this._code += `${this._indenting}${str}\n`
         this.lineToNode.set(node.id, this.linesCount)
@@ -1453,6 +1456,7 @@ export class ConstructDasCtx {
     }
 
     addError(node: Node, msg: string): boolean {
+        this.writeLine(node, `//ERROR: node error here, code discarded`)
         return this.addErrorId(node.id, msg)
     }
 
@@ -1476,20 +1480,19 @@ export class ConstructDasCtx {
                     }
                 }
                 if (!isFound) {
-                    this.addGlobalError(error.message)
+                    this.addGlobalError(error.line, error.message)
                 }
             }
         }
     }
 
-    addGlobalError(msg: string) {
-        const global_text = '\u00A0\u00A0' + 'Global error:\n\t' + msg
+    addGlobalError(line: number, msg: string) {
+        const global_text = msg + ' in line ' + (line - 3).toString()
         console.log(global_text)
-        // @ts-ignore
-        this.editor?.trigger('addcomment', ({ type: 'inline', text: global_text, position: [0, 0] }))
+        this.globalErrors += global_text
     }
 
-    addErrorId(id: number, msg: string): boolean {
+    private addErrorId(id: number, msg: string): boolean {
         if (!this.errors.has(id))
             this.errors.set(id, [msg])
         else {
@@ -1532,7 +1535,7 @@ export class ConstructDasCtx {
         this.lazyInited.add(node.id)
     }
 
-    addReqModule(module: string) {
+    addReqModule(module: string) { //TODO: move linesToNode
         this.requirements.add(module)
     }
 

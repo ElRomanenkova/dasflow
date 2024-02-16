@@ -191,9 +191,6 @@ def files_save(filePath: string; fileType: string; data: string; code: string; m
                     for err in program.errors
                         status.errors |> emplace([[CompileError message=string(err.what), file=string(err.at.fileInfo.name),
                                                                 line=err.at.line, fixme=string(err.fixme), extra=string(err.extra)]])
-    if !status.simulated
-        send_response(JV(status), id)
-        return
 
     var args <- get_command_line_arguments() // args[0] == 'dascript'
     unsafe
