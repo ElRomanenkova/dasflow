@@ -1545,8 +1545,9 @@ export class ConstructDasCtx {
     private nodeResults = new Map<number, string>()
     private processedNodes = new Set<number>()
     private requiredNodes = new Set<number>()
-    private lineToNode = new Map<number, number>()
-    private linesCount = 3
+    private lineToNode = new Map<number, number[]>()
+    private linesCount = 4
+    private reqOffset = 0
     private mainFunctions = new Array<string>()
 
     private _currentModule: Node[] = []
@@ -1569,6 +1570,8 @@ export class ConstructDasCtx {
         res.processedNodes = this.processedNodes
         res.requiredNodes = this.requiredNodes
         res._currentModule = this._currentModule
+        res.linesCount = this.linesCount
+        res.lineToNode = this.lineToNode
         return res
     }
 
@@ -1586,8 +1589,16 @@ export class ConstructDasCtx {
     }
 
     writeLine(node: Node, str: string): void {
+        for (let i = 0; i < str.split('\n').length; i += 1) {
+            if (this.lineToNode.has(node.id)) {
+                this.lineToNode.get(node.id)?.push(this.linesCount + i)
+            } else {
+                this.lineToNode.set(node.id, [])
+                this.lineToNode.get(node.id)?.push(this.linesCount + i)
+            }
+        }
+
         this._code += `${this._indenting}${str}\n`
-        this.lineToNode.set(node.id, this.linesCount)
         this.linesCount += str.split('\n').length
     }
 
@@ -1602,8 +1613,8 @@ export class ConstructDasCtx {
             if (strFile == thisFile) {
                 let isFound = false
 
-                for (const [id, line] of this.lineToNode) {
-                    if (line == error.line) {
+                for (const [id, lines] of this.lineToNode) {
+                    if (lines.includes(error.line - this.reqOffset)) {
                         this.addErrorId(id, error.message)
                         const node = this.editor.nodes.find(n => n.id == id)
                         const error_text = '\u00A0' + '\u00A0' + error.message  +
@@ -1671,7 +1682,7 @@ export class ConstructDasCtx {
         this.lazyInited.add(node.id)
     }
 
-    addReqModule(module: string) { //TODO: move linesToNode
+    addReqModule(module: string) {
         this.requirements.add(module)
     }
 
@@ -1692,7 +1703,9 @@ export class ConstructDasCtx {
             this._code = "\n\n" + this._code
         for (const req of this.requirements)
             this._code = `require ${req}\n` + this._code
+        this.reqOffset = this.requirements.size !== 0 ? this.requirements.size + /*\n\n*/ 2 : 0
         this.requirements.clear()
+
         for (const it of this.processedNodes)
             this.requiredNodes.delete(it)
         for (let requiredNode of this.requiredNodes) {
@@ -1701,6 +1714,7 @@ export class ConstructDasCtx {
     }
 
     closeChild(child: ConstructDasCtx) {
+        this.linesCount = child.linesCount
         this._code += child._code
     }
 }
