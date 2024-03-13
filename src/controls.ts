@@ -375,3 +375,101 @@ export class LangTypeSelectControl extends Rete.Control {
     }
 }
 
+
+const VueStructFieldControl = {
+    props: ['readonly', 'emitter', 'ikey', 'types', 'getData', 'putData', 'bindControl'],
+    template: '<div>' +
+        /* LabelControl - name */
+        '   <input type="text" :readonly="readonly" :value="valueName" @input="changeName($event)" @dblclick.stop="" @pointerdown.stop="" @pointermove.stop=""/>' +
+
+        /* LangTypeSelectControl - type */
+        '   <select :value="valueType" @change="changeType($event)" style="width: 120pt" @dblclick.stop="" @pointerdown.stop="" @pointermove.stop="">\n' +
+        '       <option v-for="v of types.values()" v-if="v.desc.isLocal && !v.desc.isRef && !v.desc.isBlock && !v.isAny && !v.isVoid" :value="v.desc.mn" :selected="this.typeName == v.desc.mn">{{ v.desc.typeName }}</option>\n' +
+        '   </select>' +
+
+        /* TextInputControl - value */
+        '   <span>' +
+        '       <input type="text" :readonly="readonly" v-model="value" @onfocusout="changeValue($event)" @onblur="changeValue($event)" @input="changeValue($event)" @keyup="keyup($event)" @dblclick.stop="" @pointerdown.stop="" @pointermove.stop=""/>' +
+        '   </span>' +
+        '</div>',
+    data() {
+        return {
+            valueName: "",
+            valueType: "",
+            value: ""
+        }
+    },
+    methods: {
+        changeType(e) {
+            this.valueType = e.target.value
+            this.bindControl.onTypeChange(this.valueType)
+            this.update()
+        },
+        changeName(e) {
+            this.valueName = e.target.value
+            this.update()
+        },
+        changeValue(e) {
+            this.setValue(e.target.value, this.getData(this.ikey)[2] ?? "")
+            this.update()
+        },
+        keyup(e) {
+            if (e.keyCode == 13)
+                this.changeValue(e)
+        },
+        update() {
+            if (this.ikey)
+                this.putData(this.ikey, [this.valueName, this.valueType, this.value])
+            this.emitter.trigger('process')
+        },
+        setValue(value, prevValue) {
+            const validValue = this.bindControl.validate(value, this.value)
+            this.value = validValue != value && prevValue ? prevValue : validValue
+            this.update()
+        }
+    },
+    mounted() {
+        let data = this.getData(this.ikey)
+        if (data) {
+            let [valueName, valueType, value] = data
+            this.valueName = valueName
+            this.valueType = valueType
+            this.value = value
+        }
+    }
+}
+
+
+export class StructFieldControl extends Rete.Control {
+    component: any
+    props: { [key: string]: unknown }
+    vueContext: any
+    validator?: RegExp
+    defaultValue: string
+
+    constructor(emitter: NodeEditor | null, key: string, types: Map<string, LangType>, readonly: boolean = false) {
+        super(key)
+        this.component = VueStructFieldControl
+        this.props = {emitter, ikey: key, readonly, types, bindControl: this}
+    }
+
+    onTypeChange(typeName) {
+        let type = this.getLangType(typeName)
+        // this.validator = type.validator
+        this.defaultValue = type.desc.default ?? ""
+        this.setTypeValue(this.defaultValue)
+    }
+
+    getLangType(typeName): any { console.assert() }
+
+    setTypeValue(val: string) {
+        this.vueContext.setValue(this.validate(val))
+        this.vueContext.update()
+    }
+
+    validate(val: string): string {
+        if (this.validator && !this.validator.test(val))
+            return this.defaultValue
+        return val
+    }
+}
