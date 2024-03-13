@@ -370,8 +370,7 @@ export class LangTypeSelectControl extends Rete.Control {
     }
 
     getValue() {
-        let val = this.vueContext.value
-        return val
+        return this.vueContext.value
     }
 }
 
@@ -410,7 +409,7 @@ const VueStructFieldControl = {
             this.update()
         },
         changeValue(e) {
-            this.setValue(e.target.value, this.getData(this.ikey)[2] ?? "")
+            this.setValue(e.target.value, this.getData(this.ikey).value ?? "")
             this.update()
         },
         keyup(e) {
@@ -419,7 +418,7 @@ const VueStructFieldControl = {
         },
         update() {
             if (this.ikey)
-                this.putData(this.ikey, [this.valueName, this.valueType, this.value])
+                this.putData(this.ikey, {valueName: this.valueName, valueType: this.valueType, value: this.value})
             this.emitter.trigger('process')
         },
         setValue(value, prevValue) {
@@ -431,10 +430,9 @@ const VueStructFieldControl = {
     mounted() {
         let data = this.getData(this.ikey)
         if (data) {
-            let [valueName, valueType, value] = data
-            this.valueName = valueName
-            this.valueType = valueType
-            this.value = value
+            this.valueName = data.valueName
+            this.valueType = data.valueType
+            this.value = data.value
         }
     }
 }

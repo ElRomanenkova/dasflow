@@ -1,7 +1,8 @@
 import Rete, {Engine, Input, Output, Socket} from 'rete'
 import {Node} from 'rete/types/node'
 import {NodeEditor} from 'rete/types/editor'
-import {LabelControl, LangTypeSelectControl, MultilineLabelControl, NumControl, TextInputControl, CheckBoxControl, AutocomplitComboBoxControl, ComboBoxControl} from "./controls"
+import {LabelControl, LangTypeSelectControl, MultilineLabelControl, NumControl, TextInputControl, CheckBoxControl,
+        AutocomplitComboBoxControl, ComboBoxControl, StructFieldControl} from "./controls"
 import {LangCoreDesc, LangDesc, LangFunctionDesc, LangTypeDesc, LangExtraInfo} from "./lang"
 import {Component} from "rete/types"
 import { CompileError } from './rpc'
@@ -170,7 +171,7 @@ export function generateCoreNodes(langCore: LangCoreDesc, lang: LangDesc, extra:
     const comps: Component[] = [new InjectTopLevelCode(), new InjectCode(), new Sequence(), new Var(langCtx),
         new Function(langCtx), new If(langCtx), new While(langCtx), new For(langCtx), new ModuleComponent(),
         new InputComponent(langCtx), new OutputComponent(langCtx), new InputFlowComponent(), new OutputFlowComponent(),
-        new SetValue(langCtx)]
+        new SetValue(langCtx), new Struct(langCtx)]
 
     for (const coreType of coreTypes.values()) {
         if (langCore.voidTypes.indexOf(coreType.mn) >= 0 || langCore.anyTypes.indexOf(coreType.mn) >= 0)
@@ -1013,7 +1014,7 @@ export class Function extends LangComponent {
         if (argInput) {
             if (argInput.showControl()) {
                 const argControl = <LangTypeSelectControl>argInput.control
-                if (argControl.vueContext !== undefined) {
+                if (argControl.vueContext) {
                     const controlVal = argControl.getValue()
                     inType = this.langCtx.allTypes.get(controlVal)
                 } else {
@@ -1136,8 +1137,7 @@ export class Function extends LangComponent {
                     args.push(`${ctx.nodeId(node)}_${i}: ${inType.desc.typeName}`)
                 else
                     args.push(`${ctx.nodeId(node)}_${i}`)
-
-                continue // constructInNode adds an error
+                continue
             }
 
             let childStr
@@ -1174,16 +1174,129 @@ export class Function extends LangComponent {
             args.push(childStr)
         }
 
-        if (node.data.mainFuncMark !== undefined)
-            if(node.data.mainFuncMark)
-                ctx.setMainFunc(node.data.name)
+        if(node.data.mainFuncMark)
+            ctx.setMainFunc(node.data.name)
+        if (node.data.annotation)
+            ctx.writeLine(node, `[${node.data.annotation}]`)
 
-        ctx.writeLine(node, `[${node.data.annotation}]\ndef ${node.data.name}(${args.join('; ')})`)
+        ctx.writeLine(node, `def ${node.data.name}(${args.join('; ')})`)
         const childCtx = ctx.getChild()
         if (LangComponent.constructDasFlowOut(node, childCtx))
             ctx.closeChild(childCtx)
         else
             ctx.writeLine(node, "\tpass")
+        ctx.writeLine(node, "")
+    }
+
+    constructDasNode(node: Node, ctx: ConstructDasCtx): void {
+    }
+}
+
+
+export class Struct extends LangComponent {
+    protected readonly langCtx: LangCtx
+
+    constructor(langCtx: LangCtx) {
+        super('Struct')
+        this.langCtx = langCtx
+        this._topLevel = true
+    }
+
+    async builder(node) {
+        node.addControl(new LabelControl(this.editor, 'name'))
+        node.addControl(new NumControl(this.editor, 'numArgs'))
+
+        const numArgs = node.data.numArgs ?? 0
+        for (let i = 0; i < numArgs; i++) {
+            this.addArgument(node, i)
+        }
+    }
+
+    private addArgument(node, i: number) {
+        const ctrl = new StructFieldControl(this.editor, `valueArg${i}`, this.langCtx.allTypes)
+        ctrl.getLangType = (typeName) => {
+            return typeName ? this.langCtx.getType(typeName) ?? this.langCtx.anyType : this.langCtx.anyType
+        }
+        node.addControl(ctrl)
+    }
+
+    private controleNumArgs(node, nodeRef, numArgs, reqNumArgs) {
+        if (!this.editor)
+            return false
+
+        if (numArgs < reqNumArgs) {
+            for (let i = numArgs; i < reqNumArgs; i++) {
+                this.addArgument(nodeRef, i)
+            }
+            return true
+        } else if (numArgs > reqNumArgs) {
+            for (let i = reqNumArgs; i < numArgs; i++) {
+                const argControl = nodeRef.controls.get(`valueArg${i}`)
+                if (argControl)
+                    nodeRef.removeControl(argControl)
+                delete node.data[`valueArg${i}`]
+            }
+            return true
+        }
+        return false
+    }
+
+
+    worker(node, inputs, outputs) {
+        if (!this.editor)
+            return
+        const nodeRef = this.editor.nodes.find(it => it.id == node.id)
+        if (!nodeRef)
+            return
+        let updateNode = false
+        const reqNumArgs = node.data.numArgs ?? 0
+        outputs['numArgs'] = reqNumArgs
+        const argsInput = <NumControl>nodeRef.controls.get('numArgs')
+        if (argsInput)
+            argsInput.setValue(reqNumArgs)
+        const numArgs = Math.max(0, nodeRef?.controls.size - 2 ?? 0 - 1) /// "- 1" - don`t need??
+
+        updateNode = this.controleNumArgs(node, nodeRef, numArgs, reqNumArgs)
+
+        console.log(node.data)
+
+        if (updateNode)
+            nodeRef.update()
+    }
+
+    constructDas(node, ctx): void {
+        if (node.data.name)
+            ctx.writeLine(node, `struct ${node.data.name}`)
+        else
+            ctx.writeLine(node, `struct ${ctx.nodeId(node)}`)
+
+        const numArgs = node.data.numArgs ?? 0 - 2
+        if (numArgs <= 0) {
+            ctx.writeLine('\tpass')
+            return
+        }
+
+        const ctorArgs: { [key: string]: string } = {}
+        const childCtx = ctx.getChild()
+
+        for (let i = 0; i < numArgs; i++) {
+            let argData = node.data[`valueArg${i}`]
+            let value = `${argData.valueName}`
+            if (!value )
+                continue
+
+            if (argData.valueType) {
+                let type = this.langCtx.getType(argData.valueType)
+                value += `: ${type?.desc.typeName}`
+                value += argData.value ? ` = ${type?.ctor(argData.value, ctorArgs)}` : ""
+            } else {
+                value += argData.value ? ` = ${argData.value}` : ""
+            }
+
+            childCtx.writeLine(node, value)
+        }
+
+        ctx.closeChild(childCtx)
         ctx.writeLine(node, "")
     }
 
