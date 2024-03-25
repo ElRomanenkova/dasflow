@@ -3,7 +3,7 @@ import {Node} from 'rete/types/node'
 import {NodeEditor} from 'rete/types/editor'
 import {LabelControl, LangTypeSelectControl, MultilineLabelControl, NumControl, TextInputControl, CheckBoxControl,
         AutocomplitComboBoxControl, ComboBoxControl, StructFieldControl} from "./controls"
-import {LangCoreDesc, LangDesc, LangFunctionDesc, LangTypeDesc, LangExtraInfo} from "./lang"
+import {LangCoreDesc, LangDesc, LangFunctionDesc, LangTypeDesc, LangTypeArgDesc, LangExtraInfo} from "./lang"
 import {Component} from "rete/types"
 import { CompileError } from './rpc'
 
@@ -1363,22 +1363,45 @@ export class SetValue extends LangComponent {
         const type = node.data.typeName ? this.langCtx.getType(node.data.typeName) ?? this.langCtx.anyType : this.langCtx.anyType
         node.addOutput(new Rete.Output('result', 'Result', type.getSocket(), true))
 
+        node.data.getValuePair = (i: number) => {
+            let suitableValues: string[] = []
+            for (let key in node.data) {
+                let idx = key.indexOf(`${i}_`)
+                if (idx >= 0)
+                    suitableValues.push(key.slice(idx + `${i}_`.length))
+            }
+            return suitableValues
+        }
+
+        // can't get arg's titles easier, 'cos in builder there are no info about connected nodes
         const numArgs = node.data.numArgs ?? 0
         for (let i = 0; i < numArgs; i++) {
-            this.addArgValue(node, type, i)
+            let type = ""
+            let title = ""
+
+            for (let val of [...node.data.getValuePair(i)]) {
+                let idx = val.indexOf('Type')
+                if (idx > 0) {
+                    title = val.slice(0, idx)
+                    type = node.data[`${i}_${title}Type`]
+                }
+            }
+            this.addArgValue(node, this.langCtx.getType(type) ?? this.langCtx.anyType, title, i)
         }
     }
 
-    private addArgValue(node, type, i: number) {
-        const fieldInput = new Rete.Input(`inValue${i}`, `value${i}`, type.getSocket(), false)
+    private addArgValue(node, type: LangType, title: string, i: number) {
+        const fieldInput = new Rete.Input(`inValue${i}`, `${title}`, type.getSocket(), false)
         if (type.supportTextInput()) {
-            const inputControl = new TextInputControl(this.editor, `value${i}`)
+            const inputControl = new TextInputControl(this.editor, `${i}_${title}Value`)
             // inputControl.validator = type.validator
             inputControl.defaultValue = type.desc.default ?? ""
             fieldInput.addControl(inputControl)
         }
         node.addInput(fieldInput)
-        node.data[`value${i}`] ??= type.desc.default
+
+        node.data[`${i}_${title}Type`] ??= type.desc.mn
+        node.data[`${i}_${title}Value`] ??= type.desc.default
     }
 
     private getInType(node, argInput) {
@@ -1413,23 +1436,19 @@ export class SetValue extends LangComponent {
             }
     }
 
-    private controleNumArgs(node, nodeRef, numArgs, reqNumArgs, inType) {
+    private removeInputs(node, nodeRef, from: number, to: number) {
         if (!this.editor)
-            return false
+            return
 
-        if (numArgs < reqNumArgs) {
-            for (let i = numArgs; i < reqNumArgs; i++) {
-                this.addArgValue(nodeRef, inType, i)
-            }
-        } else { // if (numArgs > reqNumArgs)
-            for (let i = reqNumArgs; i < numArgs; i++) {
-                const argInput = nodeRef.inputs.get(`inValue${i}`)
-                if (argInput) {
-                    for (const conn of [...argInput.connections])
-                        this.editor.removeConnection(conn)
-                    nodeRef.removeInput(argInput)
-                    delete node.data[`value${i}`]
-                }
+        for (let i = from; i < to; i++) {
+            const argInput = nodeRef.inputs.get(`inValue${i}`)
+            if (argInput) {
+                for (const conn of [...argInput.connections])
+                    this.editor.removeConnection(conn)
+                nodeRef.removeInput(argInput)
+
+                delete node.data[`${i}_${argInput.name}Type`]
+                delete node.data[`${i}_${argInput.name}Value`]
             }
         }
     }
@@ -1443,43 +1462,55 @@ export class SetValue extends LangComponent {
         let updateNode = false
 
         const argInput = nodeRef.inputs.get(`inVariable`)
-        let inVariableType = this.getInType(node, argInput)
-        this.setOutType(node, inVariableType, nodeRef)
+        const inVariableType = this.getInType(node, argInput)
 
-        const numArgs = node.data.numArgs ?? 0
-        let reqNumArgs : number
+        let reqNumArgs = 0
+        let numArgs = node.data.numArgs ?? 0
 
-        if (argInput?.hasConnection())
-            // reqNumArgs = argInput.connections[0].output.node?.name !== "Struct" ? 1 : -1
-            reqNumArgs = 1
-        else
-            reqNumArgs = 0
-        node.data.numArgs = reqNumArgs
+        let hasArgs = false
+        let inVariableArgs: LangTypeArgDesc[] | undefined
 
-        if (reqNumArgs !== numArgs) {
-            this.controleNumArgs(node, nodeRef, numArgs, reqNumArgs, inVariableType)
-            updateNode = true
-        } else if (reqNumArgs === numArgs) {
-            for (let i = 0; i < reqNumArgs; i++) {
-                let fieldInput = nodeRef.inputs.get(`inValue${i}`)
-                if (!fieldInput)
-                    continue
-                const prevSocket = fieldInput.socket
+        if (argInput?.hasConnection()) {
+            let inNode  = argInput.connections[0].output.node
+            const type : any = inNode!.data.typeName
 
-                inVariableType = inVariableType ?? this.langCtx.anyType
-                fieldInput.socket = (inVariableType).getSocket()
-
-                if (prevSocket != fieldInput.socket) {
-                    let inputControl = <TextInputControl>fieldInput.control
-                    // inputControl.validator = inVariableType.validator
-                    inputControl.defaultValue = inVariableType.desc.default ?? ""
-                    node.data[`value${i}`] = inVariableType.desc.default
-                    inputControl.setValue(node.data[`value${i}`])
-
-                    updateNode = true
-                }
+            inVariableArgs = this.langCtx.getType(type)?.desc.args
+            if (inVariableArgs) {
+                hasArgs = true
+                reqNumArgs = inVariableArgs.length
+            } else {
+                reqNumArgs = 1
             }
         }
+        node.data.numArgs = reqNumArgs
+
+        // FIXME: what about TT? Both sockets are equal to anyType
+        const prevVariableSocket = nodeRef.outputs.get(`result`)!.socket
+        const currentVariableSocket = (inVariableType ?? this.langCtx.anyType).getSocket()
+
+        if (currentVariableSocket !== prevVariableSocket) {
+            // Change of type has detected.
+            // Due to inability to delete control from existing input,
+            // delete all inputs and add them again if needed
+            this.removeInputs(node, nodeRef, 0, numArgs)
+            updateNode = true
+            numArgs = 0
+        }
+
+        if (reqNumArgs !== numArgs) {
+            if (numArgs < reqNumArgs) {
+                for (let i = numArgs; i < reqNumArgs; i++) {
+                    let type = hasArgs ? this.langCtx.getType(inVariableArgs![i].mn) : inVariableType ?? this.langCtx.anyType
+                    let title = hasArgs ? inVariableArgs![i].name : `value`
+                    this.addArgValue(nodeRef, type!, title, i)
+                }
+            } else { // if (numArgs > reqNumArgs)
+                this.removeInputs(node, nodeRef, reqNumArgs, numArgs)
+            }
+            updateNode = true
+        }
+
+        this.setOutType(node, inVariableType, nodeRef)
 
         if (updateNode)
             nodeRef.update()
@@ -1503,16 +1534,39 @@ export class SetValue extends LangComponent {
         if (!inVariableNode)
             return
 
-        for (let i = 0; i < numArgs; i++) {
+        const type : any = inVariableNode.data.typeName
+        let inVariableArgs = this.langCtx.getType(type)?.desc.args
+
+        if (inVariableArgs) {
+            for (let i = 0; i < numArgs; i++) {
+                let val : any
+                const inValueNode = LangComponent.constructOptionalInNode(node, `inValue${i}`, ctx)
+                if (inValueNode) {
+                    const component = <LangComponent>ctx.editor.components.get(inValueNode.name)
+                    val = component.getInputArgName(node, `inValue${i}`, inValueNode, ctx)
+                } else {
+                    const fieldType = this.langCtx.getType(inVariableArgs[i].mn)
+                    if (node.data[`${i}_${inVariableArgs[i].name}Value`] !== fieldType?.desc.default) { // was initialized on Set node
+                        val = fieldType!.ctor(node.data[`${i}_${inVariableArgs[i].name}Value`], ctorArgs)
+                    } else {//TODO: do nothing or throw an error?
+                        // val =
+                    }
+                }
+
+                if (val)
+                    ctx.writeLine(node, `${ctx.nodeId(inVariableNode)}.${inVariableArgs[i].name} = ${val}`)
+            }
+        } else { // primitive type
             let val : any
-            const inValueNode = LangComponent.constructOptionalInNode(node, `inValue${i}`, ctx)
+            const inValueNode = LangComponent.constructOptionalInNode(node, `inValue0`, ctx)
             if (inValueNode) {
                 const component = <LangComponent>ctx.editor.components.get(inValueNode.name)
-                val = component.getInputArgName(node, `inValue${i}`, inValueNode, ctx)
+                val = component.getInputArgName(node, `inValue0`, inValueNode, ctx)
             } else {
                 const fieldType = this.langCtx.getType(node.data.typeName)
-                val = fieldType!.ctor(node.data[`value${i}`], ctorArgs)
+                val = fieldType!.ctor(node.data[`0_valueValue`], ctorArgs)
             }
+
             ctx.writeLine(node, `${ctx.nodeId(inVariableNode)} = ${val}`)
         }
     }

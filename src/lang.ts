@@ -1,4 +1,4 @@
-interface LangTypeArgDesc {
+export interface LangTypeArgDesc {
     name: string
     mn: string
 }
